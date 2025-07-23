@@ -109,6 +109,7 @@ type SourceConfig struct {
     NoCompress  bool          `toml:"no_compress,omitempty"`
     InitDelay   time.Duration `toml:"init_delay,omitempty"`
     Prefetch    string        `toml:"prefetch,omitempty"`
+    Disabled    bool          `toml:"disabled,omitempty"`
 }
 ```
 
@@ -176,9 +177,8 @@ type Config struct {
     PoolChunkMaxEntropy int           `toml:"pool_chunk_max_entropy"`
     TCPPort             int           `toml:"tcp_port"`
     
-    // Entropy sources
-    Sources         map[string]SourceConfig `toml:"source"`
-    DisabledSources map[string]SourceConfig `toml:"disabled_source"`
+    // Entropy sources - each source becomes a direct TOML section
+    Sources map[string]SourceConfig
 }
 ```
 
@@ -194,7 +194,7 @@ pool_chunk_max_entropy = 8192       # Maximum size per entropy chunk
 tcp_port = 2121                      # TCP port for daemon control
 
 # Entropy Sources
-[source.dev_random]
+[dev_random]
 name = "1000 bytes from /dev/random"
 interval = "5m"
 file = "/dev/random"
@@ -202,82 +202,83 @@ size = 1000
 no_compress = true
 scale = 0.8
 
-[source.random_org]
+[random_org]
 name = "10,000 random bytes from random.org"
 interval = "4h"
 url = "https://www.random.org/cgi-bin/randbyte?nbytes=10000&format=h"
 scale = 0.9
 
-[source.random_numbers_info]
+[random_numbers_info]
 name = "1000 random numbers from RandomNumbers.info"
 interval = "30m"
-command = ["/bin/sh", "-c", "curl -s 'http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=1000&limit=10000' | grep -o ' [0-9]+' | tr -d ' ' | head -1000"]
+command = ["/bin/sh", "-c", "curl -s 'http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=1000&limit=10000' | grep -o ' [0-9]+' | tr -d ' ' | head-1000"]
 scale = 0.8
 
-[source.wikipedia_random]
+[wikipedia_random]
 name = "Random Wikipedia page (without images)"
 interval = "40m"
 url = "https://en.wikipedia.org/wiki/Special:Random"
 scale = 0.2
 
-[source.wikipedia_images]
+[wikipedia_images]
 name = "5 latest image thumbnails on Wikipedia"
 interval = "30m"
 url = "TODO: replace getWikipediaRecentImages function"
 scale = 0.2
 
-[source.wikipedia_changes]
+[wikipedia_changes]
 name = "Summary of last 50 changes to Wikipedia"
 interval = "6h"
 url = "https://en.wikipedia.org/w/api.php?hidebots=1&hidecategorization=1&days=7&limit=50&action=feedrecentchanges&feedformat=atom"
 scale = 0.05
 
-[source.apod]
+[apod]
 name = "Astronomy Picture of the Day"
 interval = "24h"
 url = "TODO: replace getApodImageURL function"
 size = 150000
 scale = 0.1
 
-[source.npr_audio]
+[npr_audio]
 name = "NPR hourly news audio"
 interval = "1h40m"
 url = "http://public.npr.org/anon.npr-mp3/npr/news/newscast.mp3"
 size = 150000
 scale = 0.1
 
-[source.nrl_world_sat]
+[nrl_world_sat]
 name = "NRL world visible/IR satellite image"
 interval = "3h"
 url = "TODO: replace getNRLWorldSatelliteURL function"
 min_size = 30000
 scale = 0.05
 
-[source.nist_beacon]
+[nist_beacon]
 name = "NIST Hardware Random Numbers Beacon"
 interval = "5m"
 url = "TODO: replace nistBeacon function"
 scale = 0.8
 
-[source.hotbits]
+[hotbits]
 name = "Hotbits Radioactive Decay Random Numbers"
 interval = "6h"
 init_delay = "1h"
 url = "TODO: replace getHotbitsNumbers function"
 scale = 0.8
 
-[source.cnn_rss]
+[cnn_rss]
 name = "CNN Latest Stories RSS Feed"
 interval = "6h"
 url = "http://rss.cnn.com/rss/cnn_latest.rss"
 scale = 0.05
 
-# Disabled sources (for reference)
-[disabled_source.anu_quantum]
+# Example of a disabled source
+[anu_quantum]
 name = "ANU Quantum Random Numbers Server"
 interval = "6h"
 url = "TODO: replace getANUNumbers function"
 scale = 0.8
+disabled = true
 ```
 
 ## CLI Interface Design
