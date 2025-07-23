@@ -98,27 +98,37 @@ type EntropySource struct {
 }
 
 type SourceConfig struct {
-    Name        string        `toml:"name"`
-    Interval    time.Duration `toml:"interval"`
-    URL         string        `toml:"url,omitempty"`
-    File        string        `toml:"file,omitempty"`
-    Command     []string      `toml:"command,omitempty"`
-    Size        int           `toml:"size,omitempty"`
-    MinSize     int           `toml:"min_size,omitempty"`
-    Scale       float64       `toml:"scale"`
-    NoCompress  bool          `toml:"no_compress,omitempty"`
-    InitDelay   time.Duration `toml:"init_delay,omitempty"`
-    Prefetch    string        `toml:"prefetch,omitempty"`
-    Disabled    bool          `toml:"disabled,omitempty"`
+    Name                string        `toml:"name"`
+    Interval            time.Duration `toml:"interval"`
+    Scale               float64       `toml:"scale"`
+    
+    // Data source methods (mutually exclusive)
+    URL                 string        `toml:"url,omitempty"`
+    File                string        `toml:"file,omitempty"`
+    Command             []string      `toml:"command,omitempty"`
+    ScriptInterpreter   string        `toml:"script_interpreter,omitempty"`
+    Script              string        `toml:"script,omitempty"`
+    
+    // Common options
+    Size                int           `toml:"size,omitempty"`
+    MinSize             int           `toml:"min_size,omitempty"`
+    NoCompress          bool          `toml:"no_compress,omitempty"`
+    InitDelay           time.Duration `toml:"init_delay,omitempty"`
+    Prefetch            string        `toml:"prefetch,omitempty"`
+    Disabled            bool          `toml:"disabled,omitempty"`
+    
+    // Custom fields accessible to scripts via environment variables
+    CustomFields        map[string]interface{} `toml:",inline"`
 }
 ```
 
 **Key Methods:**
-- `Fetch(ctx context.Context) error` - Fetches data from configured source
+- `Fetch(ctx context.Context) error` - Fetches data from configured source (URL, file, command, or script)
 - `Compress() error` - Compresses fetched data
 - `Stir() error` - Applies stirring algorithm
 - `GetEntropy() []byte` - Returns processed entropy data
 - `IsReady() bool` - Checks if source is ready for next fetch
+- `ExecuteScript(ctx context.Context) ([]byte, error)` - Executes embedded script with environment variables
 
 ### 3. Daemon (`internal/daemon/daemon.go`)
 
@@ -182,6 +192,40 @@ type Config struct {
 }
 ```
 
+## Embedded Scripting System
+
+### Script Execution Environment
+
+The Go implementation supports embedded scripts in entropy source configurations to replace the Python function-based sources from the original `.egdconf` file. Scripts have access to configuration parameters through environment variables.
+
+**Environment Variable Mapping:**
+- All TOML configuration keys are converted to environment variables with the prefix `EGD_SOURCE_`
+- Keys are converted to uppercase with underscores
+- Examples:
+  - `name` → `EGD_SOURCE_NAME`
+  - `max_images` → `EGD_SOURCE_MAX_IMAGES`
+  - `min_size` → `EGD_SOURCE_MIN_SIZE`
+
+**Script Requirements:**
+- Scripts must output binary data to stdout
+- Scripts should exit with status 0 on success, non-zero on failure
+- Scripts have a 30-second timeout for execution
+- Popular scripting languages supported: Python, Bash, PowerShell, Perl, Ruby, etc.
+
+**Script Configuration Format:**
+```toml
+[source_name]
+name = "Human readable name"
+interval = "30m"
+scale = 0.8
+script_interpreter = "python3"  # or bash, powershell, etc.
+custom_param = "value"           # Available as EGD_SOURCE_CUSTOM_PARAM
+script = '''
+# Script code here
+# Access config via: os.environ["EGD_SOURCE_CUSTOM_PARAM"]
+'''
+```
+
 ## TOML Configuration File Format (`egd.toml`)
 
 ```toml
@@ -223,8 +267,39 @@ scale = 0.2
 [wikipedia_images]
 name = "5 latest image thumbnails on Wikipedia"
 interval = "30m"
-url = "TODO: replace getWikipediaRecentImages function"
 scale = 0.2
+max_images = 5
+script_interpreter = "python3"
+script = '''
+import urllib.request
+import re
+import os
+import sys
+
+# Get configuration from environment variables
+max_images = int(os.environ.get("EGD_SOURCE_MAX_IMAGES", "5"))
+
+# Fetch recent images from Wikipedia
+httpResponse = urllib.request.urlopen("https://en.wikipedia.org/wiki/Special:NewFiles")
+data = httpResponse.read().decode(encoding="latin_1")
+count = 0
+allimgdata = b""
+
+for quotedurl in re.findall('"//upload\.wikimedia\.org/[^ "]+\.jpg"', data):
+    if count >= max_images:
+        break
+    url = "https:" + quotedurl.strip('"')
+    try:
+        httpResponse = urllib.request.urlopen(url)
+        imgdata = httpResponse.read()
+        allimgdata += imgdata
+        count += 1
+    except Exception:
+        continue
+
+# Output binary data to stdout
+sys.stdout.buffer.write(allimgdata)
+'''
 
 [wikipedia_changes]
 name = "Summary of last 50 changes to Wikipedia"
@@ -235,9 +310,38 @@ scale = 0.05
 [apod]
 name = "Astronomy Picture of the Day"
 interval = "24h"
-url = "TODO: replace getApodImageURL function"
 size = 150000
 scale = 0.1
+script_interpreter = "python3"
+script = '''
+import urllib.request
+import re
+import os
+import sys
+
+# Get APOD image URL
+httpResponse = urllib.request.urlopen("http://apod.nasa.gov/apod/")
+data = httpResponse.read().decode(encoding="latin_1")
+match = re.search(r'<img src="([^"]+)"', data, re.IGNORECASE)
+
+if match:
+    image_url = "http://apod.nasa.gov/apod/" + match.group(1)
+    try:
+        # Get size limit from environment (if set)
+        size_limit = int(os.environ.get("EGD_SOURCE_SIZE", "150000"))
+        
+        # Fetch the image
+        httpResponse = urllib.request.urlopen(image_url)
+        image_data = httpResponse.read(size_limit)
+        
+        # Output binary data to stdout
+        sys.stdout.buffer.write(image_data)
+    except Exception:
+        sys.exit(1)
+else:
+    # APOD is showing a video, not an image
+    sys.exit(1)
+'''
 
 [npr_audio]
 name = "NPR hourly news audio"
@@ -249,22 +353,94 @@ scale = 0.1
 [nrl_world_sat]
 name = "NRL world visible/IR satellite image"
 interval = "3h"
-url = "TODO: replace getNRLWorldSatelliteURL function"
 min_size = 30000
 scale = 0.05
+script_interpreter = "python3"
+script = '''
+import urllib.request
+import time
+import os
+import sys
+
+# Get configuration from environment
+min_size = int(os.environ.get("EGD_SOURCE_MIN_SIZE", "30000"))
+
+# Calculate URL for image from 4 hours ago
+now = time.gmtime(time.time() - 4 * 3600)
+base_url = "http://www.nrlmry.navy.mil/archdat/global/stitched/day_night_bm/{0}{1:02}{2:02}.{3:02}00.multisat.visir.bckgr.Global_Global_bm.DAYNGT.jpg"
+url = base_url.format(now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour // 3 * 3)
+
+try:
+    httpResponse = urllib.request.urlopen(url)
+    image_data = httpResponse.read()
+    
+    # Check minimum size requirement
+    if len(image_data) >= min_size:
+        sys.stdout.buffer.write(image_data)
+    else:
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+'''
 
 [nist_beacon]
 name = "NIST Hardware Random Numbers Beacon"
 interval = "5m"
-url = "TODO: replace nistBeacon function"
 scale = 0.8
+script_interpreter = "python3"
+script = '''
+import urllib.request
+import re
+import time
+import sys
+
+# Get the data from 80 seconds ago to ensure it exists
+seconds = round(time.time() - 80)
+
+try:
+    httpResponse = urllib.request.urlopen("https://beacon.nist.gov/rest/record/last")
+    data = httpResponse.read().decode()
+    
+    # Extract the random value from XML
+    match = re.search(r"<outputvalue>([0-9a-f]+)</outputvalue>", data, re.IGNORECASE)
+    if match:
+        hex_value = match.group(1)
+        # Convert hex string to binary and output
+        binary_data = bytes.fromhex(hex_value)
+        sys.stdout.buffer.write(binary_data)
+    else:
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+'''
 
 [hotbits]
 name = "Hotbits Radioactive Decay Random Numbers"
 interval = "6h"
 init_delay = "1h"
-url = "TODO: replace getHotbitsNumbers function"
 scale = 0.8
+script_interpreter = "python3"
+script = '''
+import urllib.request
+import re
+import sys
+
+try:
+    httpResponse = urllib.request.urlopen("https://www.fourmilab.ch/cgi-bin/Hotbits?nbytes=2048&fmt=hex")
+    data = httpResponse.read().decode()
+    
+    # Extract hex data from HTML
+    match = re.search(r"<pre>([0-9a-f\n]+)</pre>", data, re.IGNORECASE)
+    if match:
+        hex_data = match.group(1).replace("\n", "")
+        # Convert hex string to binary and output
+        binary_data = bytes.fromhex(hex_data)
+        sys.stdout.buffer.write(binary_data)
+    else:
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+'''
 
 [cnn_rss]
 name = "CNN Latest Stories RSS Feed"
@@ -276,9 +452,31 @@ scale = 0.05
 [anu_quantum]
 name = "ANU Quantum Random Numbers Server"
 interval = "6h"
-url = "TODO: replace getANUNumbers function"
 scale = 0.8
 disabled = true
+script_interpreter = "python3"
+script = '''
+import urllib.request
+import json
+import sys
+
+try:
+    url = "http://qrng.anu.edu.au/API/jsonI.php?type=hex16&length=1000&size=4"
+    httpResponse = urllib.request.urlopen(url)
+    data = httpResponse.read().decode()
+    
+    # Parse JSON response
+    json_data = json.loads(data)
+    if "data" in json_data and json_data["data"]:
+        # Join hex values and convert to binary
+        hex_string = "".join(json_data["data"])
+        binary_data = bytes.fromhex(hex_string)
+        sys.stdout.buffer.write(binary_data)
+    else:
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+'''
 ```
 
 ## CLI Interface Design
