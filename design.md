@@ -255,7 +255,7 @@ scale = 0.9
 [random_numbers_info]
 name = "1000 random numbers from RandomNumbers.info"
 interval = "30m"
-command = ["/bin/sh", "-c", "curl -s 'http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=1000&limit=10000' | grep -o ' [0-9]+' | tr -d ' ' | head-1000"]
+command = ["/bin/sh", "-c", "curl -s 'http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=1000&limit=10000' | grep -o ' [0-9]+' | tr -d ' ' | head -1000"]
 scale = 0.8
 
 [wikipedia_random]
