@@ -228,6 +228,67 @@ script = '''
 
 ## TOML Configuration File Format (`egd.toml`)
 
+### Global Configuration Parameters
+
+The configuration file begins with global parameters that control the overall behavior of the EGD daemon:
+
+- **`log_level`** (string): Sets the logging verbosity. Valid values: `"debug"`, `"info"`, `"warn"`, `"error"`. Default: `"info"`.
+- **`max_entropy`** (integer): Maximum size of the entropy pool in bytes. Default: `10485760` (10MB).
+- **`persist_file`** (string): File path where the entropy pool is periodically saved. Supports tilde expansion (`~`). Default: `"~/.egdentropy"`.
+- **`persist_interval`** (duration string): How often to save the entropy pool to disk. Format: `"5m"`, `"1h30m"`, `"24h"`. Default: `"10m"`.
+- **`pool_chunk_max_entropy`** (integer): Maximum number of bytes each entropy chunk can contain. Default: `8192`.
+- **`tcp_port`** (integer): TCP port number for daemon control commands. Default: `2121`.
+
+### Entropy Source Configuration
+
+Each entropy source is defined as a TOML section with a unique name (e.g., `[source_name]`). All entropy sources support these common parameters:
+
+#### Required Parameters
+- **`name`** (string): Human-readable description of the entropy source.
+- **`interval`** (duration string): Minimum time between fetches. Format: `"5m"`, `"2h"`, `"30s"`.
+- **`scale`** (float): Scaling factor (0.0 to 1.0) applied to computed entropy before adding to pool. Lower values reduce the entropy contribution.
+
+#### Data Source Methods (Mutually Exclusive)
+
+Choose **exactly one** of these methods to specify how data is obtained:
+
+- **`url`** (string): HTTP/HTTPS URL to fetch data from.
+- **`file`** (string): Local file path to read data from.
+- **`command`** (array of strings): Command and arguments to execute. Stdout becomes the entropy data.
+- **`script_interpreter` + `script`** (string + multiline string): Embedded script execution.
+
+#### Optional Parameters
+- **`size`** (integer): Maximum number of bytes to read from the data source. If not specified, reads all available data.
+- **`min_size`** (integer): Minimum number of bytes required for the fetch to be considered successful. Fetches returning less data are ignored.
+- **`no_compress`** (boolean): Skip compression of the fetched data. Useful for high-entropy sources like `/dev/random`. Default: `false`.
+- **`init_delay`** (duration string): Delay before making the first fetch after daemon startup. Default: no delay.
+- **`prefetch`** (string): URL to fetch (and discard) before fetching the main data source. Used for session setup.
+- **`disabled`** (boolean): Temporarily disable this entropy source without removing its configuration. Default: `false`.
+
+#### Script-Specific Parameters
+When using `script_interpreter` and `script`:
+- **`script_interpreter`** (string): Command to execute the script (e.g., `"python3"`, `"bash"`, `"powershell"`).
+- **`script`** (multiline string): The script code to execute. Must output binary data to stdout.
+- **Custom fields**: Any additional key-value pairs become environment variables accessible to the script with the `EGD_SOURCE_` prefix.
+
+#### Parameter Combinations and Restrictions
+
+**Mutually Exclusive Groups:**
+1. **Data Source Methods**: Only one of `url`, `file`, `command`, or `script_interpreter`/`script` may be used per source.
+
+**Compatible Parameter Combinations:**
+- **URL sources**: `url` + `size` + `min_size` + `prefetch`
+- **File sources**: `file` + `size`
+- **Command sources**: `command` (size limits not applicable)
+- **Script sources**: `script_interpreter` + `script` + custom fields
+
+**Parameter Dependencies:**
+- `script` requires `script_interpreter`
+- `prefetch` only works with `url` sources
+- `size` and `min_size` are ignored for `command` and `script` sources (scripts control their own output size)
+
+### Example Configuration
+
 ```toml
 # Global EGD Configuration Parameters
 log_level = "info"                    # Log level: debug, info, warn, error
