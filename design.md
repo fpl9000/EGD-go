@@ -8,17 +8,17 @@
   - [Core Components](#core-components)
   - [Package Structure](#package-structure)
 - [Core Component Design](#core-component-design)
-  - [1. Entropy Pool (`internal/entropy/pool.go`)](#1-entropy-pool-internalentropypoolgо)
-  - [2. Entropy Source (`internal/entropy/source.go`)](#2-entropy-source-internalentropysourcego)
-  - [3. Daemon (`internal/daemon/daemon.go`)](#3-daemon-internaldaemondaemongo)
-  - [4. TCP Server (`internal/daemon/server.go`)](#4-tcp-server-internaldaemonservergо)
-  - [5. Configuration System (`internal/config/config.go`)](#5-configuration-system-internalconfigconfiggo)
-- [Embedded Scripting System](#embedded-scripting-system)
-  - [Script Execution Environment](#script-execution-environment)
+  - [Configuration Package (`internal/config/`)](#configuration-package-internalconfig)
+  - [Entropy Package (`internal/entropy/`)](#entropy-package-internalentropy)
+  - [Daemon Package (`internal/daemon/`)](#daemon-package-internaldaemon)
+  - [Compression Package (`internal/compress/`)](#compression-package-internalcompress)
+  - [Utilities Package (`internal/util/`)](#utilities-package-internalutil)
 - [TOML Configuration File Format (`egd.toml`)](#toml-configuration-file-format-egdtoml)
   - [Global Configuration Parameters](#global-configuration-parameters)
   - [Entropy Source Configuration](#entropy-source-configuration)
   - [Example Configuration](#example-configuration)
+- [Embedded Scripting System](#embedded-scripting-system)
+  - [Script Execution Environment](#script-execution-environment)
 - [CLI Interface Design](#cli-interface-design)
 - [Concurrency Model](#concurrency-model)
   - [Goroutine Usage](#goroutine-usage)
@@ -101,48 +101,36 @@ egd/
 
 ## Core Component Design
 
-### 1. Entropy Pool (`internal/entropy/pool.go`)
+### Configuration Package (`internal/config/`)
+
+The configuration package handles TOML configuration parsing, validation, and type definitions for the entire application.
+
+#### `config.go` - Configuration Loading and Validation
 
 ```go
-type EntropyPool struct {
-    chunks           []*PoolChunk
-    entropyByteCount int64
-    maxEntropy       int64
-    mutex            sync.RWMutex
-}
-
-type PoolChunk struct {
-    id      int64
-    entropy []byte
-    maxSize int
+type Config struct {
+    // Global configuration parameters
+    LogLevel            string        `toml:"log_level"`
+    MaxEntropy          int64         `toml:"max_entropy"`
+    PersistFile         string        `toml:"persist_file"`
+    PersistInterval     time.Duration `toml:"persist_interval"`
+    PoolChunkMaxEntropy int           `toml:"pool_chunk_max_entropy"`
+    TCPPort             int           `toml:"tcp_port"`
+    
+    // Entropy sources - each source becomes a direct TOML section
+    Sources map[string]SourceConfig
 }
 ```
 
 **Key Methods:**
-- `AddEntropy(data []byte) int` - Adds entropy to pool, returns bytes added
-- `IsFull() bool` - Returns true if pool is at maximum capacity
-- `EntropyCount() int64` - Returns current entropy byte count
-- `ChunkCount() int` - Returns number of chunks
-- `Persist(filename string) error` - Saves pool to disk
-- `Load(filename string) error` - Loads pool from disk
+- `LoadConfig(filename string) (*Config, error)` - Parses TOML configuration file
+- `ValidateConfig() error` - Validates configuration parameters and source definitions
+- `GetDefaultConfig() *Config` - Returns configuration with default values
+- `ExpandPaths() error` - Expands tilde and environment variables in file paths
 
-### 2. Entropy Source (`internal/entropy/source.go`)
+#### `types.go` - Configuration Type Definitions
 
 ```go
-type EntropySource struct {
-    config       SourceConfig
-    entropy      []byte
-    fetched      bool
-    compressed   bool
-    stirred      bool
-    failCount    int
-    disabled     bool
-    firstFetch   time.Time
-    lastFetch    time.Time
-    lastSubset   []byte
-    client       *http.Client
-}
-
 type SourceConfig struct {
     Name                string        `toml:"name"`
     Interval            time.Duration `toml:"interval"`
@@ -166,17 +154,116 @@ type SourceConfig struct {
     // Custom fields accessible to scripts via environment variables
     CustomFields        map[string]interface{} `toml:",inline"`
 }
+
+type LogLevel int
+type SourceType int
 ```
 
 **Key Methods:**
-- `Fetch(ctx context.Context) error` - Fetches data from configured source (URL, file, command, or script)
-- `Compress() error` - Compresses fetched data
-- `Stir() error` - Applies stirring algorithm
-- `GetEntropy() []byte` - Returns processed entropy data
-- `IsReady() bool` - Checks if source is ready for next fetch
-- `ExecuteScript(ctx context.Context) ([]byte, error)` - Executes embedded script with environment variables
+- `ValidateSourceConfig() error` - Validates individual source configuration
+- `GetSourceType() SourceType` - Determines source type (URL/File/Command/Script)
+- `ToEnvironmentVars() map[string]string` - Converts config to environment variables for scripts
 
-### 3. Daemon (`internal/daemon/daemon.go`)
+### Entropy Package (`internal/entropy/`)
+
+The entropy package contains core logic for entropy pool management, source handling, and the cryptographic stirring algorithm.
+
+#### `pool.go` - Entropy Pool Management
+
+```go
+type EntropyPool struct {
+    chunks           []*PoolChunk
+    entropyByteCount int64
+    maxEntropy       int64
+    mutex            sync.RWMutex
+    logger           *slog.Logger
+}
+```
+
+**Key Methods:**
+- `NewEntropyPool(maxEntropy int64, chunkSize int) *EntropyPool` - Creates new entropy pool
+- `AddEntropy(data []byte) int` - Adds entropy to pool, returns bytes added
+- `IsFull() bool` - Returns true if pool is at maximum capacity
+- `EntropyCount() int64` - Returns current entropy byte count
+- `ChunkCount() int` - Returns number of chunks
+- `Persist(filename string) error` - Saves pool to disk with atomic write
+- `Load(filename string) error` - Loads pool from disk
+- `GetEntropy(bytes int) []byte` - Extracts entropy from pool (future feature)
+
+#### `chunk.go` - Pool Chunk Implementation
+
+```go
+type PoolChunk struct {
+    id          int64
+    entropy     []byte
+    maxSize     int
+    createdAt   time.Time
+    mutex       sync.RWMutex
+}
+```
+
+**Key Methods:**
+- `NewPoolChunk(id int64, maxSize int) *PoolChunk` - Creates new entropy chunk
+- `AddData(data []byte) int` - Adds data to chunk, returns bytes added
+- `IsFull() bool` - Returns true if chunk is at capacity
+- `Size() int` - Returns current chunk size
+- `Data() []byte` - Returns copy of chunk data
+- `Serialize() ([]byte, error)` - Serializes chunk for persistence
+- `Deserialize(data []byte) error` - Deserializes chunk from persistence
+
+#### `source.go` - Entropy Source Implementation
+
+```go
+type EntropySource struct {
+    config         SourceConfig
+    entropy        []byte
+    fetched        bool
+    compressed     bool
+    stirred        bool
+    failCount      int
+    disabled       bool
+    firstFetch     time.Time
+    lastFetch      time.Time
+    lastSubset     []byte
+    client         *http.Client
+    mutex          sync.RWMutex
+    logger         *slog.Logger
+}
+```
+
+**Key Methods:**
+- `NewEntropySource(config SourceConfig) *EntropySource` - Creates new entropy source
+- `Fetch(ctx context.Context) error` - Fetches data from configured source (URL, file, command, or script)
+- `FetchURL(ctx context.Context) error` - Fetches data from HTTP URL
+- `FetchFile() error` - Reads data from local file
+- `ExecuteCommand(ctx context.Context) error` - Runs command and captures output
+- `ExecuteScript(ctx context.Context) error` - Executes embedded script with environment variables
+- `Compress() error` - Compresses fetched data using LZ4
+- `Stir() error` - Applies cryptographic stirring algorithm
+- `GetEntropy() []byte` - Returns processed entropy data
+- `IsReady() bool` - Checks if source is ready for next fetch based on interval
+- `ShouldDisable() bool` - Checks if source should be disabled due to repeated failures
+
+#### `stirring.go` - Entropy Stirring Algorithm
+
+```go
+type Stirrer struct {
+    windowSize int
+    blockSize  int
+}
+```
+
+**Key Methods:**
+- `NewStirrer() *Stirrer` - Creates stirrer with default parameters (1024-byte window, 32-byte blocks)
+- `StirData(data []byte) []byte` - Applies stirring algorithm to entropy data
+- `processBlock(block []byte, hash []byte) []byte` - Processes single 32-byte block
+- `computeWindowHash(window []byte) []byte` - Computes SHA-256 hash over sliding window
+
+### Daemon Package (`internal/daemon/`)
+
+The daemon package implements the main daemon process, TCP control server, and process management utilities.
+
+#### `daemon.go` - Main Daemon Implementation
 
 ```go
 type Daemon struct {
@@ -188,25 +275,30 @@ type Daemon struct {
     lastPersist     time.Time
     stopChan        chan struct{}
     stopped         chan struct{}
+    mutex           sync.RWMutex
     logger          *slog.Logger
 }
 ```
 
 **Key Methods:**
-- `Start(ctx context.Context) error` - Starts the daemon process
-- `Stop() error` - Gracefully stops the daemon
+- `NewDaemon(config *config.Config) *Daemon` - Creates new daemon instance
+- `Start(ctx context.Context) error` - Starts the daemon process with initialization
+- `Stop() error` - Gracefully stops the daemon and cleans up resources
 - `MainLoop(ctx context.Context)` - Main entropy collection loop
-- `CreateLockFile() error` - Creates process lock file
-- `RemoveLockFile() error` - Removes process lock file
+- `collectFromSources(ctx context.Context)` - Collects entropy from all enabled sources
+- `shouldPersist() bool` - Checks if pool should be persisted based on interval
+- `persistPool() error` - Saves entropy pool to disk
 
-### 4. TCP Server (`internal/daemon/server.go`)
+#### `server.go` - TCP Control Server
 
 ```go
 type TCPServer struct {
-    daemon   *Daemon
-    listener net.Listener
-    port     int
-    logger   *slog.Logger
+    daemon     *Daemon
+    listener   net.Listener
+    port       int
+    clients    map[net.Conn]bool
+    mutex      sync.RWMutex
+    logger     *slog.Logger
 }
 
 type CommandResponse struct {
@@ -214,63 +306,124 @@ type CommandResponse struct {
     StatusText string `json:"status_text"`
     Data       []byte `json:"data,omitempty"`
 }
-```
 
-**Supported Commands:**
-- `quit` - Gracefully stop daemon (status 100)
-- `status` - Get entropy pool status (status 100)
-- `persist` - Force persistence of pool (status 100/300)
-
-### 5. Configuration System (`internal/config/config.go`)
-
-```go
-type Config struct {
-    // Global configuration parameters
-    LogLevel            string        `toml:"log_level"`
-    MaxEntropy          int64         `toml:"max_entropy"`
-    PersistFile         string        `toml:"persist_file"`
-    PersistInterval     time.Duration `toml:"persist_interval"`
-    PoolChunkMaxEntropy int           `toml:"pool_chunk_max_entropy"`
-    TCPPort             int           `toml:"tcp_port"`
-    
-    // Entropy sources - each source becomes a direct TOML section
-    Sources map[string]SourceConfig
+type Command struct {
+    Name string            `json:"command"`
+    Args map[string]string `json:"args,omitempty"`
 }
 ```
 
-## Embedded Scripting System
+**Key Methods:**
+- `NewTCPServer(daemon *Daemon, port int) *TCPServer` - Creates new TCP server
+- `Start() error` - Starts listening on configured port
+- `Stop() error` - Stops server and closes all connections
+- `handleConnection(conn net.Conn)` - Handles individual client connections
+- `processCommand(cmd Command) CommandResponse` - Processes control commands
+- `handleQuit()` - Gracefully stops daemon
+- `handleStatus()` - Returns entropy pool status
+- `handlePersist()` - Forces entropy pool persistence
 
-### Script Execution Environment
+#### `lockfile.go` - Process Lock File Management
 
-The Go implementation supports embedded scripts in entropy source configurations to replace the Python function-based sources from the original `.egdconf` file. Scripts have access to configuration parameters through environment variables.
-
-**Environment Variable Mapping:**
-- All TOML configuration keys are converted to environment variables with the prefix `EGD_SOURCE_`
-- Keys are converted to uppercase with underscores
-- Examples:
-  - `name` → `EGD_SOURCE_NAME`
-  - `max_images` → `EGD_SOURCE_MAX_IMAGES`
-  - `min_size` → `EGD_SOURCE_MIN_SIZE`
-
-**Script Requirements:**
-- Scripts must output binary data to stdout
-- Scripts should exit with status 0 on success, non-zero on failure
-- Scripts have a 30-second timeout for execution
-- Popular scripting languages supported: Python, Bash, PowerShell, Perl, Ruby, etc.
-
-**Script Configuration Format:**
-```toml
-[source_name]
-name = "Human readable name"
-interval = "30m"
-scale = 0.8
-script_interpreter = "python3"  # or bash, powershell, etc.
-custom_param = "value"           # Available as EGD_SOURCE_CUSTOM_PARAM
-script = '''
-# Script code here
-# Access config via: os.environ["EGD_SOURCE_CUSTOM_PARAM"]
-'''
+```go
+type LockFile struct {
+    path     string
+    file     *os.File
+    acquired bool
+    mutex    sync.Mutex
+}
 ```
+
+**Key Methods:**
+- `NewLockFile(path string) *LockFile` - Creates new lock file manager
+- `Acquire() error` - Acquires exclusive lock, prevents multiple daemon instances
+- `Release() error` - Releases lock and removes lock file
+- `IsLocked() bool` - Checks if lock is currently held
+- `GetPID() (int, error)` - Gets PID from existing lock file
+
+### Compression Package (`internal/compress/`)
+
+The compression package provides data compression utilities for entropy sources.
+
+#### `compress.go` - Compression/Decompression Utilities
+
+```go
+type Compressor struct {
+    algorithm string
+    level     int
+}
+
+type CompressionStats struct {
+    OriginalSize   int
+    CompressedSize int
+    CompressionTime time.Duration
+    Ratio          float64
+}
+```
+
+**Key Methods:**
+- `NewCompressor(algorithm string, level int) *Compressor` - Creates compressor (LZ4, GZIP, LZMA)
+- `Compress(data []byte) ([]byte, error)` - Compresses data using configured algorithm
+- `Decompress(data []byte) ([]byte, error)` - Decompresses data
+- `GetStats(original, compressed []byte) CompressionStats` - Returns compression statistics
+- `ShouldCompress(data []byte) bool` - Heuristic to determine if compression is beneficial
+- `DetectFormat(data []byte) string` - Detects compression format of data
+
+### Utilities Package (`internal/util/`)
+
+The utilities package contains cross-cutting concerns like logging, synchronization, and helper functions.
+
+#### `mutex.go` - Cross-Process Mutex Implementation
+
+```go
+type CrossProcessMutex struct {
+    name     string
+    lockFile string
+    file     *os.File
+    locked   bool
+    mutex    sync.Mutex
+}
+```
+
+**Key Methods:**
+- `NewCrossProcessMutex(name string) *CrossProcessMutex` - Creates cross-process mutex
+- `Lock() error` - Acquires cross-process lock using file locking
+- `Unlock() error` - Releases cross-process lock
+- `TryLock() bool` - Attempts to acquire lock without blocking
+
+#### `logging.go` - Logging Configuration
+
+```go
+type LogConfig struct {
+    Level      slog.Level
+    Format     string  // "json" or "text"
+    Output     io.Writer
+    AddSource  bool
+    TimeFormat string
+}
+```
+
+**Key Methods:**
+- `SetupLogging(config LogConfig) *slog.Logger` - Configures structured logging
+- `NewFileLogger(filename string, level slog.Level) *slog.Logger` - Creates file-based logger
+- `NewConsoleLogger(level slog.Level) *slog.Logger` - Creates console logger
+- `ParseLogLevel(level string) slog.Level` - Parses log level string
+
+#### `singleton.go` - Singleton Pattern Helper
+
+```go
+type Singleton struct {
+    instance interface{}
+    once     sync.Once
+    mutex    sync.RWMutex
+}
+```
+
+**Key Methods:**
+- `NewSingleton() *Singleton` - Creates singleton container
+- `GetOrCreate(factory func() interface{}) interface{}` - Gets existing or creates new instance
+- `Get() interface{}` - Gets current instance (may be nil)
+- `Reset()` - Resets singleton for testing
 
 ## TOML Configuration File Format (`egd.toml`)
 
@@ -362,8 +515,23 @@ scale = 0.9
 [random_numbers_info]
 name = "1000 random numbers from RandomNumbers.info"
 interval = "30m"
-command = ["/bin/sh", "-c", "curl -s 'http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=1000&limit=10000' | grep -o ' [0-9]+' | tr -d ' ' | head -1000"]
 scale = 0.8
+amount = 1000
+limit = 10000
+script_interpreter = "bash"
+script = '''
+#!/bin/bash
+
+# Get configuration from environment variables
+AMOUNT="${EGD_SOURCE_AMOUNT:-1000}"
+LIMIT="${EGD_SOURCE_LIMIT:-10000}"
+
+# Fetch random numbers and process them
+curl -s "http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=${AMOUNT}&limit=${LIMIT}" | \
+    grep -o ' [0-9]+' | \
+    tr -d ' ' | \
+    head -n "${AMOUNT}"
+'''
 
 [wikipedia_random]
 name = "Random Wikipedia page (without images)"
@@ -583,6 +751,40 @@ try:
         sys.exit(1)
 except Exception:
     sys.exit(1)
+'''
+```
+
+## Embedded Scripting System
+
+### Script Execution Environment
+
+The Go implementation supports embedded scripts in entropy source configurations to replace the Python function-based sources from the original `.egdconf` file. Scripts have access to configuration parameters through environment variables.
+
+**Environment Variable Mapping:**
+- All TOML configuration keys are converted to environment variables with the prefix `EGD_SOURCE_`
+- Keys are converted to uppercase with underscores
+- Examples:
+  - `name` → `EGD_SOURCE_NAME`
+  - `max_images` → `EGD_SOURCE_MAX_IMAGES`
+  - `min_size` → `EGD_SOURCE_MIN_SIZE`
+
+**Script Requirements:**
+- Scripts must output binary data to stdout
+- Scripts should exit with status 0 on success, non-zero on failure
+- Scripts have a 30-second timeout for execution
+- Popular scripting languages supported: Python, Bash, PowerShell, Perl, Ruby, etc.
+
+**Script Configuration Format:**
+```toml
+[source_name]
+name = "Human readable name"
+interval = "30m"
+scale = 0.8
+script_interpreter = "python3"  # or bash, powershell, etc.
+custom_param = "value"           # Available as EGD_SOURCE_CUSTOM_PARAM
+script = '''
+# Script code here
+# Access config via: os.environ["EGD_SOURCE_CUSTOM_PARAM"]
 '''
 ```
 
