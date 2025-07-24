@@ -528,9 +528,7 @@ LIMIT="${EGD_SOURCE_LIMIT:-10000}"
 
 # Fetch random numbers and process them
 curl -s "http://www.randomnumbers.info/cgibin/wqrng.cgi?amount=${AMOUNT}&limit=${LIMIT}" | \
-    grep -o ' [0-9]+' | \
-    tr -d ' ' | \
-    head -n "${AMOUNT}"
+    grep -o ' [0-9]+' | tr -d ' '
 '''
 
 [wikipedia_random]
@@ -726,9 +724,9 @@ scale = 0.05
 # Example of a disabled source
 [anu_quantum]
 name = "ANU Quantum Random Numbers Server"
+disabled = true
 interval = "6h"
 scale = 0.8
-disabled = true
 script_interpreter = "python3"
 script = '''
 import urllib.request
