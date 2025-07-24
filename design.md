@@ -124,9 +124,9 @@ type Config struct {
 
 **Key Methods:**
 - `LoadConfig(filename string) (*Config, error)` - Parses TOML configuration file
-- `ValidateConfig() error` - Validates configuration parameters and source definitions
+- `(c *Config) ValidateConfig() error` - Validates configuration parameters and source definitions
 - `GetDefaultConfig() *Config` - Returns configuration with default values
-- `ExpandPaths() error` - Expands tilde and environment variables in file paths
+- `(c *Config) ExpandPaths() error` - Expands tilde and environment variables in file paths
 
 #### `types.go` - Configuration Type Definitions
 
@@ -160,9 +160,9 @@ type SourceType int
 ```
 
 **Key Methods:**
-- `ValidateSourceConfig() error` - Validates individual source configuration
-- `GetSourceType() SourceType` - Determines source type (URL/File/Command/Script)
-- `ToEnvironmentVars() map[string]string` - Converts config to environment variables for scripts
+- `(sc *SourceConfig) ValidateSourceConfig() error` - Validates individual source configuration
+- `(sc *SourceConfig) GetSourceType() SourceType` - Determines source type (URL/File/Command/Script)
+- `(sc *SourceConfig) ToEnvironmentVars() map[string]string` - Converts config to environment variables for scripts
 
 ### Entropy Package (`internal/entropy/`)
 
@@ -182,13 +182,13 @@ type EntropyPool struct {
 
 **Key Methods:**
 - `NewEntropyPool(maxEntropy int64, chunkSize int) *EntropyPool` - Creates new entropy pool
-- `AddEntropy(data []byte) int` - Adds entropy to pool, returns bytes added
-- `IsFull() bool` - Returns true if pool is at maximum capacity
-- `EntropyCount() int64` - Returns current entropy byte count
-- `ChunkCount() int` - Returns number of chunks
-- `Persist(filename string) error` - Saves pool to disk with atomic write
-- `Load(filename string) error` - Loads pool from disk
-- `GetEntropy(bytes int) []byte` - Extracts entropy from pool (future feature)
+- `(p *EntropyPool) AddEntropy(data []byte) int` - Adds entropy to pool, returns bytes added
+- `(p *EntropyPool) IsFull() bool` - Returns true if pool is at maximum capacity
+- `(p *EntropyPool) EntropyCount() int64` - Returns current entropy byte count
+- `(p *EntropyPool) ChunkCount() int` - Returns number of chunks
+- `(p *EntropyPool) Persist(filename string) error` - Saves pool to disk with atomic write
+- `(p *EntropyPool) Load(filename string) error` - Loads pool from disk
+- `(p *EntropyPool) GetEntropy(bytes int) []byte` - Extracts entropy from pool (future feature)
 
 #### `chunk.go` - Pool Chunk Implementation
 
@@ -204,12 +204,12 @@ type PoolChunk struct {
 
 **Key Methods:**
 - `NewPoolChunk(id int64, maxSize int) *PoolChunk` - Creates new entropy chunk
-- `AddData(data []byte) int` - Adds data to chunk, returns bytes added
-- `IsFull() bool` - Returns true if chunk is at capacity
-- `Size() int` - Returns current chunk size
-- `Data() []byte` - Returns copy of chunk data
-- `Serialize() ([]byte, error)` - Serializes chunk for persistence
-- `Deserialize(data []byte) error` - Deserializes chunk from persistence
+- `(c *PoolChunk) AddData(data []byte) int` - Adds data to chunk, returns bytes added
+- `(c *PoolChunk) IsFull() bool` - Returns true if chunk is at capacity
+- `(c *PoolChunk) Size() int` - Returns current chunk size
+- `(c *PoolChunk) Data() []byte` - Returns copy of chunk data
+- `(c *PoolChunk) Serialize() ([]byte, error)` - Serializes chunk for persistence
+- `(c *PoolChunk) Deserialize(data []byte) error` - Deserializes chunk from persistence
 
 #### `source.go` - Entropy Source Implementation
 
@@ -233,16 +233,16 @@ type EntropySource struct {
 
 **Key Methods:**
 - `NewEntropySource(config SourceConfig) *EntropySource` - Creates new entropy source
-- `Fetch(ctx context.Context) error` - Fetches data from configured source (URL, file, command, or script)
-- `FetchURL(ctx context.Context) error` - Fetches data from HTTP URL
-- `FetchFile() error` - Reads data from local file
-- `ExecuteCommand(ctx context.Context) error` - Runs command and captures output
-- `ExecuteScript(ctx context.Context) error` - Executes embedded script with environment variables
-- `Compress() error` - Compresses fetched data using LZ4
-- `Stir() error` - Applies cryptographic stirring algorithm
-- `GetEntropy() []byte` - Returns processed entropy data
-- `IsReady() bool` - Checks if source is ready for next fetch based on interval
-- `ShouldDisable() bool` - Checks if source should be disabled due to repeated failures
+- `(s *EntropySource) Fetch(ctx context.Context) error` - Fetches data from configured source (URL, file, command, or script)
+- `(s *EntropySource) FetchURL(ctx context.Context) error` - Fetches data from HTTP URL
+- `(s *EntropySource) FetchFile() error` - Reads data from local file
+- `(s *EntropySource) ExecuteCommand(ctx context.Context) error` - Runs command and captures output
+- `(s *EntropySource) ExecuteScript(ctx context.Context) error` - Executes embedded script with environment variables
+- `(s *EntropySource) Compress() error` - Compresses fetched data using LZ4
+- `(s *EntropySource) Stir() error` - Applies cryptographic stirring algorithm
+- `(s *EntropySource) GetEntropy() []byte` - Returns processed entropy data
+- `(s *EntropySource) IsReady() bool` - Checks if source is ready for next fetch based on interval
+- `(s *EntropySource) ShouldDisable() bool` - Checks if source should be disabled due to repeated failures
 
 #### `stirring.go` - Entropy Stirring Algorithm
 
@@ -255,9 +255,9 @@ type Stirrer struct {
 
 **Key Methods:**
 - `NewStirrer() *Stirrer` - Creates stirrer with default parameters (1024-byte window, 32-byte blocks)
-- `StirData(data []byte) []byte` - Applies stirring algorithm to entropy data
-- `processBlock(block []byte, hash []byte) []byte` - Processes single 32-byte block
-- `computeWindowHash(window []byte) []byte` - Computes SHA-256 hash over sliding window
+- `(s *Stirrer) StirData(data []byte) []byte` - Applies stirring algorithm to entropy data
+- `(s *Stirrer) processBlock(block []byte, hash []byte) []byte` - Processes single 32-byte block
+- `(s *Stirrer) computeWindowHash(window []byte) []byte` - Computes SHA-256 hash over sliding window
 
 ### Daemon Package (`internal/daemon/`)
 
@@ -282,12 +282,12 @@ type Daemon struct {
 
 **Key Methods:**
 - `NewDaemon(config *config.Config) *Daemon` - Creates new daemon instance
-- `Start(ctx context.Context) error` - Starts the daemon process with initialization
-- `Stop() error` - Gracefully stops the daemon and cleans up resources
-- `MainLoop(ctx context.Context)` - Main entropy collection loop
-- `collectFromSources(ctx context.Context)` - Collects entropy from all enabled sources
-- `shouldPersist() bool` - Checks if pool should be persisted based on interval
-- `persistPool() error` - Saves entropy pool to disk
+- `(d *Daemon) Start(ctx context.Context) error` - Starts the daemon process with initialization
+- `(d *Daemon) Stop() error` - Gracefully stops the daemon and cleans up resources
+- `(d *Daemon) MainLoop(ctx context.Context)` - Main entropy collection loop
+- `(d *Daemon) collectFromSources(ctx context.Context)` - Collects entropy from all enabled sources
+- `(d *Daemon) shouldPersist() bool` - Checks if pool should be persisted based on interval
+- `(d *Daemon) persistPool() error` - Saves entropy pool to disk
 
 #### `server.go` - TCP Control Server
 
@@ -315,13 +315,13 @@ type Command struct {
 
 **Key Methods:**
 - `NewTCPServer(daemon *Daemon, port int) *TCPServer` - Creates new TCP server
-- `Start() error` - Starts listening on configured port
-- `Stop() error` - Stops server and closes all connections
-- `handleConnection(conn net.Conn)` - Handles individual client connections
-- `processCommand(cmd Command) CommandResponse` - Processes control commands
-- `handleQuit()` - Gracefully stops daemon
-- `handleStatus()` - Returns entropy pool status
-- `handlePersist()` - Forces entropy pool persistence
+- `(t *TCPServer) Start() error` - Starts listening on configured port
+- `(t *TCPServer) Stop() error` - Stops server and closes all connections
+- `(t *TCPServer) handleConnection(conn net.Conn)` - Handles individual client connections
+- `(t *TCPServer) processCommand(cmd Command) CommandResponse` - Processes control commands
+- `(t *TCPServer) handleQuit()` - Gracefully stops daemon
+- `(t *TCPServer) handleStatus()` - Returns entropy pool status
+- `(t *TCPServer) handlePersist()` - Forces entropy pool persistence
 
 #### `lockfile.go` - Process Lock File Management
 
@@ -336,10 +336,10 @@ type LockFile struct {
 
 **Key Methods:**
 - `NewLockFile(path string) *LockFile` - Creates new lock file manager
-- `Acquire() error` - Acquires exclusive lock, prevents multiple daemon instances
-- `Release() error` - Releases lock and removes lock file
-- `IsLocked() bool` - Checks if lock is currently held
-- `GetPID() (int, error)` - Gets PID from existing lock file
+- `(lf *LockFile) Acquire() error` - Acquires exclusive lock, prevents multiple daemon instances
+- `(lf *LockFile) Release() error` - Releases lock and removes lock file
+- `(lf *LockFile) IsLocked() bool` - Checks if lock is currently held
+- `(lf *LockFile) GetPID() (int, error)` - Gets PID from existing lock file
 
 ### Compression Package (`internal/compress/`)
 
@@ -363,8 +363,8 @@ type CompressionStats struct {
 
 **Key Methods:**
 - `NewCompressor(algorithm string, level int) *Compressor` - Creates compressor (LZ4, GZIP, LZMA)
-- `Compress(data []byte) ([]byte, error)` - Compresses data using configured algorithm
-- `Decompress(data []byte) ([]byte, error)` - Decompresses data
+- `(c *Compressor) Compress(data []byte) ([]byte, error)` - Compresses data using configured algorithm
+- `(c *Compressor) Decompress(data []byte) ([]byte, error)` - Decompresses data
 - `GetStats(original, compressed []byte) CompressionStats` - Returns compression statistics
 - `ShouldCompress(data []byte) bool` - Heuristic to determine if compression is beneficial
 - `DetectFormat(data []byte) string` - Detects compression format of data
@@ -387,9 +387,9 @@ type CrossProcessMutex struct {
 
 **Key Methods:**
 - `NewCrossProcessMutex(name string) *CrossProcessMutex` - Creates cross-process mutex
-- `Lock() error` - Acquires cross-process lock using file locking
-- `Unlock() error` - Releases cross-process lock
-- `TryLock() bool` - Attempts to acquire lock without blocking
+- `(m *CrossProcessMutex) Lock() error` - Acquires cross-process lock using file locking
+- `(m *CrossProcessMutex) Unlock() error` - Releases cross-process lock
+- `(m *CrossProcessMutex) TryLock() bool` - Attempts to acquire lock without blocking
 
 #### `logging.go` - Logging Configuration
 
@@ -421,9 +421,9 @@ type Singleton struct {
 
 **Key Methods:**
 - `NewSingleton() *Singleton` - Creates singleton container
-- `GetOrCreate(factory func() interface{}) interface{}` - Gets existing or creates new instance
-- `Get() interface{}` - Gets current instance (may be nil)
-- `Reset()` - Resets singleton for testing
+- `(s *Singleton) GetOrCreate(factory func() interface{}) interface{}` - Gets existing or creates new instance
+- `(s *Singleton) Get() interface{}` - Gets current instance (may be nil)
+- `(s *Singleton) Reset()` - Resets singleton for testing
 
 ## TOML Configuration File Format (`egd.toml`)
 
