@@ -350,7 +350,11 @@ package daemon
 import (
     "context"
     "log/slog"
+    "os"
+    "os/signal"
+    "runtime"
     "sync"
+    "syscall"
     "time"
     
     "egd/internal/config"
@@ -379,6 +383,7 @@ type Daemon struct {
 - `(d *Daemon) collectFromSources(ctx context.Context)` - Collects entropy from all enabled sources
 - `(d *Daemon) shouldPersist() bool` - Checks if pool should be persisted based on interval
 - `(d *Daemon) persistPool() error` - Saves entropy pool to disk
+- `(d *Daemon) setupGracefulShutdown()` - Sets up cross-platform signal handling for graceful shutdown
 
 #### `server.go` - TCP Control Server
 
@@ -983,7 +988,7 @@ Implements the exact same algorithm as Python version:
 ### Platform Considerations
 
 - **Lock Files** - Platform-specific paths (`/tmp/egd.lck` on Unix, temp dir on Windows)
-- **Signals** - SIGTERM/SIGINT handling for graceful shutdown
+- **Signals** - Cross-platform graceful shutdown using `os.Interrupt` (all platforms) and `syscall.SIGTERM` (Unix only)
 - **File Paths** - Cross-platform path handling using `filepath` package
 - **Process Management** - Platform-specific daemon backgrounding
 
