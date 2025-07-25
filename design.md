@@ -7,6 +7,7 @@
 - [Architecture Overview](#architecture-overview)
   - [Core Components](#core-components)
   - [Package Structure](#package-structure)
+  - [Key Dependencies](#key-dependencies)
 - [Core Component Design](#core-component-design)
   - [Configuration Package (`internal/config/`)](#configuration-package-internalconfig)
   - [Entropy Package (`internal/entropy/`)](#entropy-package-internalentropy)
@@ -23,7 +24,6 @@
 - [Concurrency Model](#concurrency-model)
   - [Goroutine Usage](#goroutine-usage)
   - [Synchronization](#synchronization)
-- [Key Dependencies](#key-dependencies)
 - [Implementation Details](#implementation-details)
   - [Entropy Stirring Algorithm](#entropy-stirring-algorithm)
   - [Error Handling](#error-handling)
@@ -99,6 +99,20 @@ egd/
 └── README.md
 ```
 
+### Key Dependencies
+
+```go
+// Standard library dependencies
+log/slog                            // Structured logging (Go 1.21+)
+
+// Required external dependencies
+github.com/BurntSushi/toml          // TOML configuration parsing
+github.com/spf13/cobra              // CLI framework
+github.com/spf13/viper              // Configuration management
+github.com/pierrec/lz4              // LZ4 compression (or compress/gzip)
+golang.org/x/sys                    // System-specific operations
+```
+
 ## Core Component Design
 
 ### Configuration Package (`internal/config/`)
@@ -156,7 +170,22 @@ type SourceConfig struct {
 }
 
 type LogLevel int
+
+const (
+    LogLevelDebug LogLevel = iota
+    LogLevelInfo
+    LogLevelWarn
+    LogLevelError
+)
+
 type SourceType int
+
+const (
+    SourceTypeURL SourceType = iota
+    SourceTypeFile
+    SourceTypeCommand
+    SourceTypeScript
+)
 ```
 
 **Key Methods:**
@@ -831,17 +860,6 @@ egd config show
 - **Configuration** - Read-only after initialization
 - **Daemon State** - Channels for shutdown coordination
 - **File Operations** - File locking for persistence
-
-## Key Dependencies
-
-```go
-// Required external dependencies
-github.com/BurntSushi/toml          // TOML configuration parsing
-github.com/spf13/cobra              // CLI framework
-github.com/spf13/viper              // Configuration management
-github.com/pierrec/lz4              // LZ4 compression (or compress/gzip)
-golang.org/x/sys                    // System-specific operations
-```
 
 ## Implementation Details
 
