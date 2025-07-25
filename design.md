@@ -61,6 +61,8 @@ This document outlines the design for a Go implementation of the Entropy Gatheri
 
 ## Architecture Overview
 
+The EGD Go implementation is organized as a single Go module with distinct packages under the `internal/` directory. Each directory corresponds to a separate Go package that encapsulates related functionality.
+
 ### Core Components
 
 1. **Entropy Pool** - Stores collected entropy in chunks
@@ -99,6 +101,14 @@ egd/
 └── README.md
 ```
 
+**Go Package Structure:**
+- `main` - Entry point and CLI commands (`main.go`)
+- `config` - Configuration parsing and validation (`internal/config/`)
+- `entropy` - Entropy pool, sources, and stirring (`internal/entropy/`)
+- `daemon` - Main daemon process and TCP server (`internal/daemon/`)
+- `compress` - Data compression utilities (`internal/compress/`)
+- `util` - Cross-cutting utilities and helpers (`internal/util/`)
+
 ### Key Dependencies
 
 ```go
@@ -122,6 +132,12 @@ The configuration package handles TOML configuration parsing, validation, and ty
 #### `config.go` - Configuration Loading and Validation
 
 ```go
+package config
+
+import (
+    "time"
+)
+
 type Config struct {
     // Global configuration parameters
     LogLevel            string        `toml:"log_level"`
@@ -145,6 +161,12 @@ type Config struct {
 #### `types.go` - Configuration Type Definitions
 
 ```go
+package config
+
+import (
+    "time"
+)
+
 type SourceConfig struct {
     Name                string        `toml:"name"`
     Interval            time.Duration `toml:"interval"`
@@ -200,6 +222,13 @@ The entropy package contains core logic for entropy pool management, source hand
 #### `pool.go` - Entropy Pool Management
 
 ```go
+package entropy
+
+import (
+    "log/slog"
+    "sync"
+)
+
 type EntropyPool struct {
     chunks           []*PoolChunk
     entropyByteCount int64
@@ -222,6 +251,13 @@ type EntropyPool struct {
 #### `chunk.go` - Pool Chunk Implementation
 
 ```go
+package entropy
+
+import (
+    "sync"
+    "time"
+)
+
 type PoolChunk struct {
     id          int64
     entropy     []byte
@@ -243,8 +279,20 @@ type PoolChunk struct {
 #### `source.go` - Entropy Source Implementation
 
 ```go
+package entropy
+
+import (
+    "context"
+    "log/slog"
+    "net/http"
+    "sync"
+    "time"
+    
+    "egd/internal/config"
+)
+
 type EntropySource struct {
-    config         SourceConfig
+    config         config.SourceConfig
     entropy        []byte
     fetched        bool
     compressed     bool
@@ -261,7 +309,7 @@ type EntropySource struct {
 ```
 
 **Key Methods:**
-- `NewEntropySource(config SourceConfig) *EntropySource` - Creates new entropy source
+- `NewEntropySource(config config.SourceConfig) *EntropySource` - Creates new entropy source
 - `(s *EntropySource) Fetch(ctx context.Context) error` - Fetches data from configured source (URL, file, command, or script)
 - `(s *EntropySource) FetchURL(ctx context.Context) error` - Fetches data from HTTP URL
 - `(s *EntropySource) FetchFile() error` - Reads data from local file
@@ -276,6 +324,8 @@ type EntropySource struct {
 #### `stirring.go` - Entropy Stirring Algorithm
 
 ```go
+package entropy
+
 type Stirrer struct {
     windowSize int
     blockSize  int
@@ -295,6 +345,18 @@ The daemon package implements the main daemon process, TCP control server, and p
 #### `daemon.go` - Main Daemon Implementation
 
 ```go
+package daemon
+
+import (
+    "context"
+    "log/slog"
+    "sync"
+    "time"
+    
+    "egd/internal/config"
+    "egd/internal/entropy"
+)
+
 type Daemon struct {
     config          *config.Config
     pool            *entropy.EntropyPool
@@ -321,6 +383,14 @@ type Daemon struct {
 #### `server.go` - TCP Control Server
 
 ```go
+package daemon
+
+import (
+    "log/slog"
+    "net"
+    "sync"
+)
+
 type TCPServer struct {
     daemon     *Daemon
     listener   net.Listener
@@ -355,6 +425,13 @@ type Command struct {
 #### `lockfile.go` - Process Lock File Management
 
 ```go
+package daemon
+
+import (
+    "os"
+    "sync"
+)
+
 type LockFile struct {
     path     string
     file     *os.File
@@ -377,6 +454,12 @@ The compression package provides data compression utilities for entropy sources.
 #### `compress.go` - Compression/Decompression Utilities
 
 ```go
+package compress
+
+import (
+    "time"
+)
+
 type Compressor struct {
     algorithm string
     level     int
@@ -405,6 +488,13 @@ The utilities package contains cross-cutting concerns like logging, synchronizat
 #### `mutex.go` - Cross-Process Mutex Implementation
 
 ```go
+package util
+
+import (
+    "os"
+    "sync"
+)
+
 type CrossProcessMutex struct {
     name     string
     lockFile string
@@ -423,6 +513,13 @@ type CrossProcessMutex struct {
 #### `logging.go` - Logging Configuration
 
 ```go
+package util
+
+import (
+    "io"
+    "log/slog"
+)
+
 type LogConfig struct {
     Level      slog.Level
     Format     string  // "json" or "text"
@@ -441,6 +538,12 @@ type LogConfig struct {
 #### `singleton.go` - Singleton Pattern Helper
 
 ```go
+package util
+
+import (
+    "sync"
+)
+
 type Singleton struct {
     instance interface{}
     once     sync.Once
