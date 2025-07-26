@@ -48,7 +48,7 @@
 
 ## Overview
 
-This document outlines the design for a Go implementation of the Entropy Gathering Daemon (EGD) that behaves exactly like the existing Python version (`egd.py`). The Go application will be a dual-purpose binary that functions as both a command-line control utility and the daemon process itself.
+This document outlines the design for a Go implementation of the Entropy Gathering Daemon (EGD) that behaves exactly like the existing Python version (see file `egd.py`). The Go application will be a dual-purpose binary that functions as both a command-line control utility and the daemon process itself.
 
 ## Key Requirements
 
@@ -79,7 +79,7 @@ egd/
 ├── main.go                 # Entry point and CLI commands
 ├── go.mod                  # Go module definition
 ├── go.sum                  # Dependency checksums
-├── internal/
+├── internal/               # Internal packages
 │   ├── config/
 │   │   ├── config.go       # Configuration loading and validation
 │   │   └── types.go        # Configuration type definitions
