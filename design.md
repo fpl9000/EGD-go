@@ -158,6 +158,19 @@ type Config struct {
 - `GetDefaultConfig() *Config` - Returns configuration with default values
 - `(c *Config) ExpandPaths() error` - Expands tilde and environment variables in file paths
 
+**Global Configuration Validation Rules:**
+- `log_level`: Must be one of "debug", "info", "warn", "error" (case-insensitive)
+- `max_entropy`: Must be positive integer, recommended minimum 1MB (1048576 bytes)
+- `persist_file`: Must be valid file path, parent directory must exist and be writable
+- `persist_interval`: Must be valid duration string, minimum "10s", maximum "24h"
+- `pool_chunk_max_entropy`: Must be positive integer, recommended range 1KB-64KB
+- `tcp_port`: Must be valid port number (1024-65535 for non-root users, 1-65535 for root)
+
+**Source Validation Dependencies:**
+- At least one entropy source must be defined and enabled
+- Source names must be unique and non-empty
+- Each source must have exactly one data source method (URL, File, Command, or Script)
+
 #### `types.go` - Configuration Type Definitions
 
 ```go
@@ -215,6 +228,41 @@ const (
 - `(sc *SourceConfig) GetSourceType() SourceType` - Determines source type (URL/File/Command/Script)
 - `(sc *SourceConfig) ToEnvironmentVars() map[string]string` - Converts config to environment variables for scripts
 
+**Source Configuration Validation Rules:**
+
+**Required Fields:**
+- `name`: Must be non-empty string, maximum 100 characters
+- `interval`: Must be valid duration string, minimum "10s", maximum "168h" (7 days)
+- `scale`: Must be float between 0.0 and 1.0 (inclusive)
+
+**Data Source Method (Exactly One Required):**
+- `url`: Must be valid HTTP/HTTPS URL, maximum 500 characters
+- `file`: Must be valid file path, file must exist and be readable
+- `command`: Must be non-empty array, first element must be executable command
+- `script_interpreter` + `script`: Both required together, interpreter must be valid command
+
+**Optional Field Validation:**
+- `size`: If specified, must be positive integer, maximum 100MB (104857600 bytes)
+- `min_size`: If specified, must be positive integer, must be ≤ `size` if both specified
+- `no_compress`: Boolean, defaults to false
+- `init_delay`: If specified, must be valid duration string, maximum "24h"
+- `prefetch`: If specified, must be valid HTTP/HTTPS URL, only valid with `url` sources
+- `disabled`: Boolean, defaults to false
+
+**Cross-Field Validation Rules:**
+- If `script_interpreter` is specified, `script` must also be specified
+- If `script` is specified, `script_interpreter` must also be specified
+- `prefetch` can only be used with `url` sources
+- `size` and `min_size` are ignored for `command` and `script` sources
+- Custom fields (for scripts) must have valid environment variable names (alphanumeric + underscore)
+
+**Security Validation:**
+- `script_interpreter`: Must be in allowed list or full path to verified executable
+- `script`: Must not exceed 64KB in size
+- `command`: Arguments must not contain null bytes or control characters
+- `file`: Must not be a device file, must be regular file or named pipe
+- `url`: Must use HTTPS for external hosts, HTTP only allowed for localhost
+
 ### Entropy Package (`internal/entropy/`)
 
 The entropy package contains core logic for entropy pool management, source handling, and the cryptographic stirring algorithm.
@@ -247,6 +295,79 @@ type EntropyPool struct {
 - `(p *EntropyPool) Persist(filename string) error` - Saves pool to disk with atomic write
 - `(p *EntropyPool) Load(filename string) error` - Loads pool from disk
 - `(p *EntropyPool) GetEntropy(bytes int) []byte` - Extracts entropy from pool (future feature)
+
+**Persistence Format Specification:**
+
+**Binary File Format (Little Endian):**
+```
+Header (32 bytes):
+- Magic Number: 4 bytes (0x45474400 = "EGD\0")
+- Format Version: 4 bytes (uint32, current = 1)
+- Pool Max Entropy: 8 bytes (int64)
+- Chunk Max Size: 4 bytes (int32)
+- Chunk Count: 4 bytes (uint32)
+- Created Timestamp: 8 bytes (int64, Unix nanoseconds)
+
+Per-Chunk Data:
+- Chunk ID: 8 bytes (int64)
+- Chunk Size: 4 bytes (uint32)
+- Entropy Data: variable length (Chunk Size bytes)
+
+Footer (32 bytes):
+- Total Entropy Bytes: 8 bytes (int64)
+- File Checksum: 8 bytes (CRC64-ISO)
+- Magic Number: 4 bytes (0x45474400 = "EGD\0")
+- Reserved: 12 bytes (zero-filled for future use)
+```
+
+**Atomic Write Implementation:**
+```go
+func (p *EntropyPool) Persist(filename string) error {
+    // Write to temporary file first
+    tempFile := filename + ".tmp." + strconv.FormatInt(time.Now().UnixNano(), 36)
+    
+    // Create temp file with restrictive permissions (0600)
+    f, err := os.OpenFile(tempFile, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+    
+    // Write data with checksum calculation
+    if err := p.writePoolData(f); err != nil {
+        os.Remove(tempFile)
+        return err
+    }
+    
+    // Ensure data is written to disk
+    if err := f.Sync(); err != nil {
+        os.Remove(tempFile)
+        return err
+    }
+    f.Close()
+    
+    // Atomic rename (platform-specific implementation)
+    return os.Rename(tempFile, filename)
+}
+```
+
+**Corruption Detection and Recovery:**
+- **Header Validation**: Check magic numbers and version compatibility
+- **Checksum Verification**: Verify CRC64 of entire file content
+- **Size Consistency**: Verify chunk sizes match declared lengths
+- **Range Validation**: Ensure all values are within reasonable bounds
+
+**Backward Compatibility Strategy:**
+- Version field allows format evolution
+- Unknown versions are rejected with clear error message
+- Future versions may support format conversion
+- Recommend backing up pool files before daemon upgrades
+
+**Error Handling:**
+- **Disk Full**: Return specific error, do not leave partial files
+- **Permission Denied**: Clear error message with file path
+- **Corruption Detected**: Log detailed corruption information, refuse to load
+- **Version Mismatch**: Specific error message indicating upgrade/downgrade needed
 
 #### `chunk.go` - Pool Chunk Implementation
 
@@ -320,6 +441,70 @@ type EntropySource struct {
 - `(s *EntropySource) GetEntropy() []byte` - Returns processed entropy data
 - `(s *EntropySource) IsReady() bool` - Checks if source is ready for next fetch based on interval
 - `(s *EntropySource) ShouldDisable() bool` - Checks if source should be disabled due to repeated failures
+
+**Script Execution Security Boundaries:**
+
+**Resource Limits:**
+```go
+type ScriptLimits struct {
+    MaxExecutionTime    time.Duration // 30 seconds default
+    MaxMemoryMB         int           // 50MB default
+    MaxOutputSize       int           // 10MB default
+    MaxFileDescriptors  int           // 64 default
+    MaxCPUPercent       int           // 50% default (per core)
+}
+```
+
+**Execution Environment:**
+- **Working Directory**: Set to secure temporary directory, not user's home or daemon directory
+- **Environment Variables**: Only EGD_SOURCE_* variables and minimal system variables (PATH, HOME, TEMP)
+- **Process User**: Run with same user as daemon (no privilege escalation)
+- **Network Access**: Unrestricted (scripts may need to fetch external data)
+- **File System Access**: Limited to working directory and system temp directories
+
+**Security Restrictions:**
+- **Timeout Enforcement**: Hard termination after MaxExecutionTime using context.WithTimeout
+- **Memory Monitoring**: Track memory usage via process monitoring (implementation-specific)
+- **Output Size Limit**: Terminate script if stdout exceeds MaxOutputSize
+- **Signal Handling**: Scripts cannot ignore SIGTERM/SIGKILL
+- **Process Isolation**: Use process groups to ensure child processes are also terminated
+
+**Error Handling:**
+- **Timeout**: Treat as temporary failure, retry with exponential backoff
+- **Memory Limit**: Treat as permanent failure, disable source after 3 consecutive failures
+- **Output Too Large**: Treat as temporary failure, may indicate network issues
+- **Exit Code != 0**: Treat as temporary failure unless exit code indicates permanent error (127 = command not found)
+
+**Implementation Requirements:**
+```go
+// Script execution with security boundaries
+func (s *EntropySource) ExecuteScript(ctx context.Context) error {
+    // Create secure execution context
+    scriptCtx, cancel := context.WithTimeout(ctx, s.limits.MaxExecutionTime)
+    defer cancel()
+    
+    // Set up secure working directory
+    workDir, err := s.createSecureWorkDir()
+    if err != nil {
+        return err
+    }
+    defer os.RemoveAll(workDir)
+    
+    // Prepare environment variables
+    env := s.buildSecureEnvironment()
+    
+    // Execute with limits monitoring
+    return s.executeWithLimits(scriptCtx, workDir, env)
+}
+```
+
+**Allowed Script Interpreters:**
+- `bash`, `sh` - Shell scripting
+- `python3`, `python` - Python scripts
+- `powershell` - Windows PowerShell (Windows only)
+- `perl` - Perl scripts
+- `ruby` - Ruby scripts
+- Custom interpreters can be added via configuration validation
 
 #### `stirring.go` - Entropy Stirring Algorithm
 
@@ -415,7 +600,89 @@ type Command struct {
     Name string            `json:"command"`
     Args map[string]string `json:"args,omitempty"`
 }
+
+// Protocol error codes
+const (
+    StatusOK                  = 200
+    StatusBadRequest         = 400
+    StatusCommandNotFound    = 404
+    StatusInternalError      = 500
+    StatusServiceUnavailable = 503
+)
 ```
+
+**TCP Protocol Specification:**
+
+The daemon listens on localhost only (127.0.0.1) for security. Each connection handles a single command and is automatically closed after the response.
+
+**Message Format:**
+- **Request**: Single JSON line terminated with `\n`
+- **Response**: Single JSON line terminated with `\n`
+- **Encoding**: UTF-8
+- **Connection**: One command per connection, server closes after response
+
+**Request Format:**
+```json
+{"command": "status", "args": {}}
+{"command": "persist", "args": {}}
+{"command": "quit", "args": {}}
+```
+
+**Response Format:**
+```json
+{"status_code": 200, "status_text": "OK", "data": <base64_encoded_data>}
+{"status_code": 400, "status_text": "Bad Request", "data": null}
+```
+
+**Supported Commands:**
+
+1. **`status`** - Returns entropy pool status
+   - Args: None
+   - Response data: JSON object with pool statistics
+   ```json
+   {
+     "entropy_bytes": 1048576,
+     "max_entropy": 10485760,
+     "chunk_count": 128,
+     "is_full": false,
+     "last_persist": "2024-01-15T10:30:00Z"
+   }
+   ```
+
+2. **`persist`** - Forces immediate pool persistence
+   - Args: None
+   - Response data: JSON object with persistence result
+   ```json
+   {
+     "bytes_written": 1048576,
+     "file_path": "/home/user/.egdentropy",
+     "persist_time": "2024-01-15T10:30:00Z"
+   }
+   ```
+
+3. **`quit`** - Gracefully stops the daemon
+   - Args: None
+   - Response data: JSON object with shutdown status
+   ```json
+   {
+     "message": "Daemon shutting down gracefully",
+     "uptime_seconds": 86400
+   }
+   ```
+
+**Error Responses:**
+- **400 Bad Request**: Malformed JSON or invalid command
+- **404 Command Not Found**: Unknown command name
+- **500 Internal Error**: Server error during command execution
+- **503 Service Unavailable**: Daemon is shutting down
+
+**Security Considerations:**
+- Server binds to localhost (127.0.0.1) only
+- No authentication required (localhost access implies local user)
+- Commands are read-only except for `persist` and `quit`
+- No sensitive data exposed in responses
+- Connection timeout: 30 seconds
+- Maximum request size: 1KB
 
 **Key Methods:**
 - `NewTCPServer(daemon *Daemon, port int) *TCPServer` - Creates new TCP server
@@ -980,10 +1247,133 @@ Implements the exact same algorithm as Python version:
 
 ### Error Handling
 
-- **Source Failures** - Track failure count, disable after 5 failures
-- **Network Timeouts** - 30-second timeout for HTTP operations
-- **File Operations** - Detailed error reporting with file paths
-- **Daemon Crashes** - Graceful recovery with entropy pool persistence
+**Error Classification Strategy:**
+
+All errors in the EGD system are categorized into three types to ensure consistent handling:
+
+```go
+type ErrorCategory int
+
+const (
+    ErrorTemporary ErrorCategory = iota  // Retry later with backoff
+    ErrorPermanent                       // Disable source or fail fast  
+    ErrorFatal                          // Stop daemon immediately
+)
+
+type EGDError struct {
+    Category    ErrorCategory
+    Source      string           // Component that generated error
+    Message     string           // Human-readable error message
+    Cause       error           // Underlying error (for error chains)
+    Code        string          // Machine-readable error code
+    Metadata    map[string]any  // Additional context data
+}
+
+func (e *EGDError) Error() string {
+    return fmt.Sprintf("[%s] %s: %s", e.Source, e.Code, e.Message)
+}
+```
+
+**Error Categories by Component:**
+
+**Configuration Errors (Fatal):**
+- Invalid TOML syntax → Fatal (CONFIG_INVALID_TOML)
+- Missing required fields → Fatal (CONFIG_MISSING_REQUIRED)
+- Invalid value ranges → Fatal (CONFIG_INVALID_VALUE)
+- Mutually exclusive fields → Fatal (CONFIG_MUTUALLY_EXCLUSIVE)
+
+**Entropy Source Errors:**
+- Network timeouts → Temporary (SOURCE_NETWORK_TIMEOUT)
+- HTTP 5xx errors → Temporary (SOURCE_SERVER_ERROR)
+- HTTP 4xx errors → Permanent (SOURCE_CLIENT_ERROR)
+- File not found → Permanent (SOURCE_FILE_NOT_FOUND)
+- Permission denied → Permanent (SOURCE_PERMISSION_DENIED)
+- Script timeout → Temporary (SOURCE_SCRIPT_TIMEOUT)
+- Script memory limit → Permanent after 3 failures (SOURCE_SCRIPT_MEMORY)
+- Command not found → Permanent (SOURCE_COMMAND_NOT_FOUND)
+
+**Pool/Storage Errors:**
+- Disk full → Temporary (STORAGE_DISK_FULL)
+- Permission denied → Fatal (STORAGE_PERMISSION_DENIED)
+- Corruption detected → Fatal (STORAGE_CORRUPTED)
+- I/O errors → Temporary (STORAGE_IO_ERROR)
+
+**Daemon/System Errors:**
+- Lock file conflicts → Fatal (DAEMON_ALREADY_RUNNING)
+- Port binding failed → Fatal (DAEMON_PORT_IN_USE)
+- Signal handling errors → Fatal (DAEMON_SIGNAL_ERROR)
+
+**Retry and Backoff Strategy:**
+
+```go
+type RetryConfig struct {
+    MaxRetries      int           // Maximum retry attempts
+    BaseDelay       time.Duration // Initial delay between retries
+    MaxDelay        time.Duration // Maximum delay (capped exponential backoff)
+    BackoffFactor   float64       // Exponential backoff multiplier
+    Jitter          bool          // Add random jitter to prevent thundering herd
+}
+
+// Default retry configurations by error type
+var RetryConfigs = map[ErrorCategory]RetryConfig{
+    ErrorTemporary: {
+        MaxRetries:    5,
+        BaseDelay:     time.Second * 10,
+        MaxDelay:      time.Minute * 5,
+        BackoffFactor: 2.0,
+        Jitter:        true,
+    },
+    ErrorPermanent: {
+        MaxRetries: 0, // No retries for permanent errors
+    },
+    ErrorFatal: {
+        MaxRetries: 0, // No retries for fatal errors
+    },
+}
+```
+
+**Source Failure Tracking:**
+
+```go
+type SourceFailureTracker struct {
+    ConsecutiveFailures int
+    LastFailureTime     time.Time
+    TotalFailures       int64
+    DisabledUntil      time.Time
+    LastError          *EGDError
+}
+
+// Disable thresholds
+const (
+    MaxConsecutiveFailures = 5
+    DisableDuration        = time.Hour * 1  // Temporary disable duration
+    MaxDisableDuration     = time.Hour * 24 // Maximum disable duration
+)
+```
+
+**Error Reporting and Logging:**
+
+- **Structured Logging**: All errors logged with consistent fields (timestamp, level, source, code, message, metadata)
+- **Error Aggregation**: Group similar errors to prevent log spam
+- **Escalation**: Critical errors (Fatal category) trigger immediate alerts
+- **Context Preservation**: Error chains maintain full context through wrapping
+- **Metrics Integration**: Error rates and patterns tracked for monitoring
+
+**Error Recovery Patterns:**
+
+1. **Graceful Degradation**: Continue operation with reduced functionality when possible
+2. **Circuit Breaker**: Temporarily disable failing components to prevent cascade failures  
+3. **Fallback Sources**: Use alternative entropy sources when primary sources fail
+4. **State Preservation**: Always persist entropy pool before handling fatal errors
+5. **Clean Shutdown**: Ensure proper cleanup even during error conditions
+
+**Implementation Requirements:**
+
+- All public methods must return typed errors with proper categorization
+- Error messages must be actionable and include relevant context
+- Temporary failures must implement exponential backoff with jitter
+- Permanent failures must log sufficient detail for troubleshooting
+- Fatal errors must trigger graceful shutdown with state preservation
 
 ### Platform Considerations
 
