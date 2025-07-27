@@ -721,7 +721,7 @@ type Command struct {
 
 // Protocol error codes
 const (
-    StatusOK                  = 200
+    StatusOK                 = 200
     StatusBadRequest         = 400
     StatusCommandNotFound    = 404
     StatusInternalError      = 500
