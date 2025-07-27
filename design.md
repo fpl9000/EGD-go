@@ -139,15 +139,25 @@ import (
 )
 
 type Config struct {
-    // Global configuration parameters
+    // Logging verbosity level (debug, info, warn, error)
     LogLevel            string        `toml:"log_level"`
+
+    // Maximum total bytes the entropy pool can contain
     MaxEntropy          int64         `toml:"max_entropy"`
+
+    // File path where entropy pool is periodically saved
     PersistFile         string        `toml:"persist_file"`
+
+    // How often to automatically save the entropy pool to disk
     PersistInterval     time.Duration `toml:"persist_interval"`
+
+    // Maximum bytes each individual pool chunk can hold
     PoolChunkMaxEntropy int           `toml:"pool_chunk_max_entropy"`
+
+    // TCP port number for daemon control commands
     TCPPort             int           `toml:"tcp_port"`
     
-    // Entropy sources - each source becomes a direct TOML section
+    // Map of entropy source configurations keyed by source name
     Sources map[string]SourceConfig
 }
 ```
@@ -181,26 +191,49 @@ import (
 )
 
 type SourceConfig struct {
+    // Human-readable description of this entropy source
     Name                string        `toml:"name"`
+
+    // Minimum time between fetches from this source
     Interval            time.Duration `toml:"interval"`
+
+    // Scaling factor (0.0-1.0) applied to computed entropy
     Scale               float64       `toml:"scale"`
     
-    // Data source methods (mutually exclusive)
+    // HTTP/HTTPS URL to fetch data from (mutually exclusive with other methods)
     URL                 string        `toml:"url,omitempty"`
+
+    // Local file path to read data from (mutually exclusive with other methods)
     File                string        `toml:"file,omitempty"`
+
+    // Command and arguments to execute (mutually exclusive with other methods)
     Command             []string      `toml:"command,omitempty"`
+
+    // Interpreter command for executing embedded scripts
     ScriptInterpreter   string        `toml:"script_interpreter,omitempty"`
+
+    // Script code to execute for data collection
     Script              string        `toml:"script,omitempty"`
     
-    // Common options
+    // Maximum number of bytes to read from the data source
     Size                int           `toml:"size,omitempty"`
+
+    // Minimum bytes required for successful fetch
     MinSize             int           `toml:"min_size,omitempty"`
+
+    // Skip compression for high-entropy sources
     NoCompress          bool          `toml:"no_compress,omitempty"`
+
+    // Delay before first fetch after daemon startup
     InitDelay           time.Duration `toml:"init_delay,omitempty"`
+
+    // URL to fetch before main URL (for session setup)
     Prefetch            string        `toml:"prefetch,omitempty"`
+
+    // Temporarily disable this source without removing config
     Disabled            bool          `toml:"disabled,omitempty"`
     
-    // Custom fields accessible to scripts via environment variables
+    // Additional key-value pairs passed to scripts as environment variables
     CustomFields        map[string]interface{} `toml:",inline"`
 }
 
@@ -278,10 +311,19 @@ import (
 )
 
 type EntropyPool struct {
+    // Collection of entropy chunks that make up the pool
     chunks           []*PoolChunk
+
+    // Current total bytes of entropy stored in the pool
     entropyByteCount int64
+
+    // Maximum bytes the pool is allowed to contain
     maxEntropy       int64
+
+    // Read-write mutex for thread-safe access to pool
     mutex            sync.RWMutex
+
+    // Structured logger for pool operations
     logger           *slog.Logger
 }
 ```
@@ -380,10 +422,19 @@ import (
 )
 
 type PoolChunk struct {
+    // Unique identifier for this chunk within the pool
     id          int64
+
+    // Binary entropy data stored in this chunk
     entropy     []byte
+
+    // Maximum bytes this chunk is allowed to contain
     maxSize     int
+
+    // Timestamp when this chunk was created
     createdAt   time.Time
+
+    // Read-write mutex for thread-safe access to chunk data
     mutex       sync.RWMutex
 }
 ```
@@ -413,18 +464,43 @@ import (
 )
 
 type EntropySource struct {
+    // Configuration parameters for this entropy source
     config         config.SourceConfig
+
+    // Raw entropy data fetched from the source
     entropy        []byte
+
+    // Whether data has been successfully fetched
     fetched        bool
+
+    // Whether compression has been applied to the data
     compressed     bool
+
+    // Whether cryptographic stirring has been applied
     stirred        bool
+
+    // Number of consecutive failures from this source
     failCount      int
+
+    // Whether this source is currently disabled due to failures
     disabled       bool
+
+    // Timestamp of the first successful fetch
     firstFetch     time.Time
+
+    // Timestamp of the most recent fetch attempt
     lastFetch      time.Time
+
+    // Subset of entropy data from previous fetch (for comparison)
     lastSubset     []byte
+
+    // HTTP client for URL-based sources
     client         *http.Client
+
+    // Read-write mutex for thread-safe access to source state
     mutex          sync.RWMutex
+
+    // Structured logger for source operations
     logger         *slog.Logger
 }
 ```
@@ -512,7 +588,10 @@ func (s *EntropySource) ExecuteScript(ctx context.Context) error {
 package entropy
 
 type Stirrer struct {
+    // Size of sliding hash window in bytes (default 1024)
     windowSize int
+
+    // Size of each processing block in bytes (default 32)
     blockSize  int
 }
 ```
@@ -547,15 +626,34 @@ import (
 )
 
 type Daemon struct {
+    // Configuration settings for the daemon
     config          *config.Config
+
+    // Entropy pool for storing collected entropy
     pool            *entropy.EntropyPool
+
+    // List of configured entropy sources
     sources         []*entropy.EntropySource
+
+    // TCP server for handling control commands
     server          *TCPServer
+
+    // Path to process lock file
     lockFile        string
+
+    // Timestamp of last entropy pool persistence
     lastPersist     time.Time
+
+    // Channel to signal daemon shutdown
     stopChan        chan struct{}
+
+    // Channel to signal shutdown completion
     stopped         chan struct{}
+
+    // Read-write mutex for thread-safe access to daemon state
     mutex           sync.RWMutex
+
+    // Structured logger for daemon operations
     logger          *slog.Logger
 }
 ```
@@ -582,22 +680,42 @@ import (
 )
 
 type TCPServer struct {
+    // Reference to the daemon instance for command processing
     daemon     *Daemon
+
+    // TCP listener for incoming connections
     listener   net.Listener
+
+    // Port number the server listens on
     port       int
+
+    // Set of active client connections (bool values are always true,
+    // because this map is acting as a set)
     clients    map[net.Conn]bool
+
+    // Read-write mutex for thread-safe client management
     mutex      sync.RWMutex
+
+    // Structured logger for server operations
     logger     *slog.Logger
 }
 
 type CommandResponse struct {
+    // HTTP-style status code for the response
     StatusCode int    `json:"status_code"`
+
+    // Human-readable status message
     StatusText string `json:"status_text"`
+
+    // Optional response data (base64-encoded in JSON)
     Data       []byte `json:"data,omitempty"`
 }
 
 type Command struct {
+    // Command name (status, persist, quit)
     Name string            `json:"command"`
+
+    // Optional command arguments
     Args map[string]string `json:"args,omitempty"`
 }
 
@@ -705,9 +823,16 @@ import (
 )
 
 type LockFile struct {
+    // File system path to the lock file
     path     string
+
+    // Open file handle to the lock file
     file     *os.File
+
+    // Whether the lock is currently held by this process
     acquired bool
+
+    // Mutex for thread-safe lock operations
     mutex    sync.Mutex
 }
 ```
@@ -733,14 +858,24 @@ import (
 )
 
 type Compressor struct {
+    // Compression algorithm name (LZ4, GZIP, LZMA)
     algorithm string
+
+    // Compression level (algorithm-specific)
     level     int
 }
 
 type CompressionStats struct {
+    // Size of original uncompressed data in bytes
     OriginalSize   int
+
+    // Size of compressed data in bytes
     CompressedSize int
+
+    // Time taken to perform compression
     CompressionTime time.Duration
+
+    // Compression ratio (compressed/original)
     Ratio          float64
 }
 ```
@@ -768,10 +903,19 @@ import (
 )
 
 type CrossProcessMutex struct {
+    // Human-readable name for this mutex
     name     string
+
+    // File system path to the lock file
     lockFile string
+
+    // Open file handle for the lock file
     file     *os.File
+
+    // Whether this process currently holds the lock
     locked   bool
+
+    // Thread-safe mutex for local synchronization
     mutex    sync.Mutex
 }
 ```
@@ -793,10 +937,19 @@ import (
 )
 
 type LogConfig struct {
+    // Minimum log level to output
     Level      slog.Level
-    Format     string  // "json" or "text"
+
+    // Output format ("json" or "text")
+    Format     string
+
+    // Writer where log messages are sent
     Output     io.Writer
+
+    // Whether to include source code location in logs
     AddSource  bool
+
+    // Time format for log timestamps
     TimeFormat string
 }
 ```
@@ -817,8 +970,13 @@ import (
 )
 
 type Singleton struct {
+    // The singleton instance (nil until first creation)
     instance interface{}
+
+    // Ensures instance is created only once
     once     sync.Once
+
+    // Read-write mutex for thread-safe access
     mutex    sync.RWMutex
 }
 ```
