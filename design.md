@@ -1678,6 +1678,7 @@ lint:
 3. **Plugin System** - Dynamic entropy source loading
 4. **Distributed Mode** - Multiple daemons sharing entropy
 5. **Hardware Integration** - TRNG device support
+6. **Proxy Support** - HTTP proxy configuration for entropy sources
 
 ---
 
